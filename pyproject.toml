@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hep-pad"
+version = "0.1.0"
+description = "WYSIWYG editor for HEP plots: declarative plot specs rendered with mplhep"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib>=3.8",
+    "mplhep>=1.0",
+    "uproot>=5",
+    "pydantic>=2",
+    "ruamel.yaml",
+    "typer",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "hist", "pandas", "httpx", "pillow"]
+
+[project.scripts]
+hep-pad = "heppad.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/heppad"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build]
+# The built frontend is not in version control but must ship in the wheel.
+artifacts = ["src/heppad/server/static/**"]
