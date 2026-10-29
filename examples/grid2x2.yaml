@@ -1,0 +1,33 @@
+# Four panels: data/MC per sample, shape comparison, efficiency, and a 2D map.
+version: 1
+inputs: {sample: sample.root}
+canvas: {width: 16, height: 14}
+layout: {rows: 2, cols: 2, wspace: 0.3, hspace: 0.3}
+pads:
+  - id: a
+    label: {text: Preliminary, lumi: 138, loc: 0}
+    xaxis: {label: '$m_{\mu\mu}$ [GeV]'}
+    yaxis: {label: Events, log: true}
+    layers:
+      - {id: dy, kind: histogram, ref: {file: sample, path: mc/dy/h_mass}, label: Drell-Yan}
+      - {id: tt, kind: histogram, ref: {file: sample, path: mc/tt/h_mass}, label: '$t\bar{t}$'}
+  - id: b
+    col: 1
+    xaxis: {label: '$m_{\mu\mu}$ [GeV]'}
+    yaxis: {label: A.U.}
+    layers:
+      - {id: dy_n, kind: histogram, ref: {file: sample, path: mc/dy/h_mass}, normalize: true, rebin: 3, label: Drell-Yan}
+      - {id: vv_n, kind: histogram, ref: {file: sample, path: mc/vv/h_mass}, normalize: true, rebin: 3, label: Diboson}
+  - id: c
+    row: 1
+    xaxis: {label: '$p_T$ [GeV]'}
+    yaxis: {label: Efficiency, range: [0, 1.2]}
+    layers:
+      - {id: eff, kind: graph, ref: {file: sample, path: eff/g_trig}, label: HLT_IsoMu24}
+  - id: d
+    row: 1
+    col: 1
+    xaxis: {label: '$\eta$'}
+    yaxis: {label: '$p_T$ [GeV]'}
+    layers:
+      - {id: map, kind: hist2d, ref: {file: sample, path: mc/dy/h_eta_pt}, logz: true}

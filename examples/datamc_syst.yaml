@@ -1,0 +1,43 @@
+# Data vs stacked MC with stat. + syst. uncertainty bands.
+#   JES, JER and PU are discovered from "<nominal>_<source>Up/Down" histograms;
+#   lumi is a flat 1.6%; the ttbar cross section and QCD scale envelope only affect ttbar.
+version: 1
+inputs: {sample: sample.root}
+layout: {rows: 2, height_ratios: [3, 1], hspace: 0.07}
+pads:
+  - id: main
+    label: {text: Preliminary, lumi: 138, com: 13}
+    xaxis: {range: [60, 120], ticklabels: false}
+    yaxis: {label: Events / GeV, log: true}
+    legend: {loc: upper right, reverse: true}
+    layers:
+      - id: bkg
+        kind: stack
+        systematics:
+          - {kind: shape}
+          - {kind: norm, source: lumi, up: 0.016}
+        members:
+          - {ref: {file: sample, path: mc/vv/h_mass}, label: Diboson, color: '#e42536'}
+          - ref: {file: sample, path: mc/tt/h_mass}
+            label: '$t\bar{t}$'
+            color: '#f89c20'
+            systematics:
+              - {kind: norm, source: tt_xsec, up: 0.05}
+              - {kind: envelope, source: tt_scale, variations: [scale0, scale1, scale2, scale3, scale4, scale5]}
+          - {ref: {file: sample, path: mc/dy/h_mass}, label: Drell-Yan, color: '#5790fc'}
+      - {id: unc, kind: errorband, of: bkg, content: total, label: 'Stat. $\oplus$ syst. unc.'}
+      - id: data
+        kind: histogram
+        ref: {file: sample, path: data/h_mass}
+        histtype: errorbar
+        label: Data
+        color: black
+  - id: ratio
+    row: 1
+    sharex: main
+    xaxis: {label: '$m_{\mu\mu}$ [GeV]'}
+    yaxis: {label: Data / MC, range: [0.8, 1.2]}
+    layers:
+      - {id: r, kind: ratio, num: data, den: bkg, den_band_content: total}
+    annotations:
+      - {kind: hline, at: 1.0}

@@ -1,0 +1,13 @@
+# Trigger efficiency from a TGraphAsymmErrors.
+version: 1
+inputs: {sample: sample.root}
+pads:
+  - id: main
+    label: {text: Simulation, data: false, lumi: null}
+    xaxis: {label: '$p_T$ [GeV]', range: [0, 100]}
+    yaxis: {label: Efficiency, range: [0, 1.2]}
+    layers:
+      - {id: eff, kind: graph, ref: {file: sample, path: eff/g_trig}, label: HLT_IsoMu24, color: black}
+    annotations:
+      - {kind: text, text: '$|\eta| < 2.4$', xy: [0.05, 0.92]}
+      - {kind: hline, at: 1.0, color: gray}

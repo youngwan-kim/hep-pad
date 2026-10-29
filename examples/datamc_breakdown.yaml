@@ -1,0 +1,51 @@
+# Uncertainty breakdown: sources grouped into Detector / Theory (lumi lands in "Other"),
+# shown as nested bands in the ratio pad: stat, + detector, + theory, total.
+version: 1
+inputs: {sample: sample.root}
+canvas: {width: 10, height: 11}
+layout: {rows: 2, height_ratios: [3, 1.4], hspace: 0.07}
+pads:
+  - id: main
+    label: {text: Preliminary, lumi: 138, com: 13}
+    xaxis: {range: [60, 120], ticklabels: false}
+    yaxis: {label: Events / GeV, log: true}
+    legend: {loc: upper right, reverse: true}
+    layers:
+      - id: bkg
+        kind: stack
+        syst_groups:
+          Detector: ['^JE', '^PU$']
+          Theory: ['^tt_']
+        systematics:
+          - {kind: shape}
+          - {kind: norm, source: lumi, up: 0.016}
+        members:
+          - {ref: {file: sample, path: mc/vv/h_mass}, label: Diboson, color: '#e42536'}
+          - ref: {file: sample, path: mc/tt/h_mass}
+            label: '$t\bar{t}$'
+            color: '#f89c20'
+            systematics:
+              - {kind: norm, source: tt_xsec, up: 0.05}
+              - {kind: envelope, source: tt_scale, variations: [scale0, scale1, scale2, scale3, scale4, scale5]}
+          - {ref: {file: sample, path: mc/dy/h_mass}, label: Drell-Yan, color: '#5790fc'}
+      - {id: unc, kind: errorband, of: bkg, content: total, label: 'Stat. $\oplus$ syst. unc.'}
+      - id: data
+        kind: histogram
+        ref: {file: sample, path: data/h_mass}
+        histtype: errorbar
+        label: Data
+        color: black
+  - id: ratio
+    row: 1
+    sharex: main
+    xaxis: {label: '$m_{\mu\mu}$ [GeV]'}
+    yaxis: {label: Data / MC, range: [0.82, 1.22]}
+    legend: {loc: upper left, ncol: 4, fontsize: 13}
+    layers:
+      - {id: b_total, kind: errorband, of: bkg, relative: true, content: total, label: Total, hatch: null, facecolor: '#deebf7', color: '#deebf7'}
+      - {id: b_theory, kind: errorband, of: bkg, relative: true, content: [stat, Detector, Theory], label: '+ Theory', hatch: null, facecolor: '#9ecae1', color: '#9ecae1'}
+      - {id: b_det, kind: errorband, of: bkg, relative: true, content: [stat, Detector], label: '+ Detector', hatch: null, facecolor: '#4292c6', color: '#4292c6'}
+      - {id: b_stat, kind: errorband, of: bkg, relative: true, content: stat, label: Stat., hatch: null, facecolor: '#08519c', color: '#08519c'}
+      - {id: r, kind: ratio, num: data, den: bkg, den_band: false}
+    annotations:
+      - {kind: hline, at: 1.0}

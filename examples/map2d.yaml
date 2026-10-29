@@ -1,0 +1,10 @@
+# 2D histogram with a log colour scale.
+version: 1
+inputs: {sample: sample.root}
+pads:
+  - id: main
+    label: {text: Simulation, data: false, lumi: null}
+    xaxis: {label: '$\eta$'}
+    yaxis: {label: '$p_T$ [GeV]'}
+    layers:
+      - {id: map, kind: hist2d, ref: {file: sample, path: mc/dy/h_eta_pt}, logz: true, cbar_label: Events}
