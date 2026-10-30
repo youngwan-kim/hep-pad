@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import { ApiError, api } from "./api";
 import { sameSelection, type Selection } from "./spec";
-import type { EffectiveLayout, PlotSpec, RenderResponse } from "./types";
+import type { EffectiveLayout, PlotSpec, RenderResponse, RootObject } from "./types";
 
-export type Dialog = null | "new" | "layout" | "save" | "ratio";
+export type Dialog = null | "new" | "layout" | "save" | "ratio" | "openFile";
 
 interface State {
   ready: boolean;
@@ -25,6 +25,8 @@ interface State {
   defaults: Record<string, EffectiveLayout>;
   /** ROOT file the browser should expand on start (from `hep-pad serve file.root`). */
   openRoot: string | null;
+  /** ROOT files opened with File → Open ROOT file (local paths or URLs), shown atop the browser. */
+  openFiles: { file: string; objects: RootObject[] }[];
 
   init(): Promise<void>;
   openDocument(spec: PlotSpec, docPath: string | null, baseDir: string): void;
@@ -38,6 +40,8 @@ interface State {
   flash(msg: string): void;
   getDefaults(style: string): Promise<EffectiveLayout>;
   markSaved(spec: PlotSpec, docPath: string, baseDir: string): void;
+  addOpenFile(file: string, objects: RootObject[]): void;
+  closeOpenFile(file: string): void;
 }
 
 const HISTORY = 200;
@@ -88,6 +92,7 @@ export const useStore = create<State>((set, get) => {
     status: null,
     defaults: {},
     openRoot: null,
+    openFiles: [],
 
     async init() {
       const s = await api.session();
@@ -166,6 +171,15 @@ export const useStore = create<State>((set, get) => {
       set({ spec, docPath, baseDir, dirty: false });
       scheduleRender();
     },
+
+    addOpenFile(file, objects) {
+      // Reopening moves the file to the top with a fresh listing.
+      set({ openFiles: [{ file, objects }, ...get().openFiles.filter((f) => f.file !== file)] });
+    },
+
+    closeOpenFile(file) {
+      set({ openFiles: get().openFiles.filter((f) => f.file !== file) });
+    },
   };
 });
 
@@ -181,6 +195,8 @@ export function validSelection(sel: Selection | null, spec: PlotSpec): Selection
       return { type: "layer", pad: p.id, layer: l.id };
   }
   if (sel.type === "annotation" && !p.annotations[sel.index]) return { type: "pad", pad: p.id };
-  if (sel.type === "label" && !p.label) return { type: "pad", pad: p.id };
+  if ((sel.type === "label" || sel.type === "lumi") && !p.label) return { type: "pad", pad: p.id };
+  if (sel.type === "xlabel" && !p.xaxis.label) return { type: "xaxis", pad: p.id };
+  if (sel.type === "ylabel" && !p.yaxis.label) return { type: "yaxis", pad: p.id };
   return sel;
 }

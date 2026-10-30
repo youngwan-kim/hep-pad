@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import { addObject, targetPad, type AddMode } from "../actions";
 import { useStore } from "../store";
-import type { FsEntry, Preview, RootObject } from "../types";
+import type { Branch, FsEntry, Preview, RootObject } from "../types";
+import { TreePanel } from "./TreeFields";
 import { DRAG_MIME, type DragPayload } from "./CanvasView";
 
 interface TreeNode {
@@ -40,11 +41,17 @@ function buildTree(objects: RootObject[]): TreeNode[] {
   return root.children;
 }
 
-const KIND_ICON: Record<string, string> = { h1: "H1", h2: "H2", graph: "Gr", other: "··" };
+const KIND_ICON: Record<string, string> = { h1: "H1", h2: "H2", graph: "Gr", tree: "T", other: "··" };
+
+type Picked = { file: string; obj: RootObject; branch?: string };
+type BranchState = Record<string, Branch[] | "loading" | { error: string }>;
 
 export function Browser() {
   const startDir = useStore((s) => s.startDir);
   const openRoot = useStore((s) => s.openRoot);
+  const openFiles = useStore((s) => s.openFiles);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const seen = useRef<Set<string>>(new Set());
   const [dir, setDir] = useState<string>("");
   const [dirInput, setDirInput] = useState("");
   const [entries, setEntries] = useState<FsEntry[]>([]);
@@ -52,7 +59,21 @@ export function Browser() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, RootObject[] | "loading">>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [picked, setPicked] = useState<{ file: string; obj: RootObject } | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [branches, setBranches] = useState<BranchState>({});
+
+  const loadBranches = async (file: string, path: string) => {
+    const key = `${file}:${path}`;
+    if (branches[key] && !("error" in (branches[key] as object))) return;
+    setBranches((b) => ({ ...b, [key]: "loading" }));
+    try {
+      const r = await api.branches(file, path);
+      setBranches((b) => ({ ...b, [key]: r.branches }));
+    } catch (e) {
+      setBranches((b) => ({ ...b, [key]: { error: e instanceof ApiError ? e.messages.join(", ") : String(e) } }));
+    }
+  };
+  const treeProps = { expanded, setExpanded, picked, onPick: setPicked, branches, loadBranches };
 
   const go = async (d?: string) => {
     try {
@@ -97,6 +118,22 @@ export function Browser() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRoot]);
 
+  // Expand the first few directories of a newly opened file, as for files clicked in the list.
+  useEffect(() => {
+    for (const { file, objects } of openFiles) {
+      if (seen.current.has(file)) continue;
+      seen.current.add(file);
+      setExpanded((x) => new Set([...x, ...objects.filter((o) => o.kind === "dir").slice(0, 6).map((o) => `${file}:${o.path}`)]));
+    }
+  }, [openFiles]);
+
+  const toggleCollapsed = (file: string) =>
+    setCollapsed((s) => {
+      const n = new Set(s);
+      n.has(file) ? n.delete(file) : n.add(file);
+      return n;
+    });
+
   const openSpec = async (path: string) => {
     const s = useStore.getState();
     if (s.dirty && !window.confirm("Discard unsaved changes?")) return;
@@ -115,6 +152,25 @@ export function Browser() {
         <input value={dirInput} onChange={(e) => setDirInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && go(dirInput)} spellCheck={false} title={dir} />
       </div>
+      {openFiles.length > 0 && (
+        <div className="open-files">
+          <div className="heading">Open files</div>
+          {openFiles.map(({ file, objects }) => (
+            <div key={file}>
+              <div className="entry root" title={file} onClick={() => toggleCollapsed(file)}>
+                <span className="twisty">{collapsed.has(file) ? "▸" : "▾"}</span>
+                <span className="icon root">R</span>
+                <span className="name">{file.split("/").pop()}</span>
+                <button className="close" title="Close"
+                  onClick={(e) => { e.stopPropagation(); useStore.getState().closeOpenFile(file); }}>×</button>
+              </div>
+              {!collapsed.has(file) && (
+                <RootTree file={file} objects={objects} {...treeProps} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {error && <div className="banner error small">{error}</div>}
       <div className="browser-list">
         {entries.length === 0 && !error && <p className="muted pad">No folders, .root or .yaml files here.</p>}
@@ -130,13 +186,14 @@ export function Browser() {
             </div>
             {e.kind === "root" && open[e.path] === "loading" && <div className="muted pad">Reading…</div>}
             {e.kind === "root" && Array.isArray(open[e.path]) && (
-              <RootTree file={e.path} objects={open[e.path] as RootObject[]} expanded={expanded}
-                setExpanded={setExpanded} picked={picked} onPick={setPicked} />
+              <RootTree file={e.path} objects={open[e.path] as RootObject[]} {...treeProps} />
             )}
           </div>
         ))}
       </div>
-      {picked && <ObjectPanel file={picked.file} obj={picked.obj} />}
+      {picked && (picked.branch
+        ? <TreePanel file={picked.file} tree={picked.obj} branch={picked.branch} />
+        : <ObjectPanel file={picked.file} obj={picked.obj} />)}
     </div>
   );
 }
@@ -146,10 +203,12 @@ function RootTree(props: {
   objects: RootObject[];
   expanded: Set<string>;
   setExpanded: (f: (s: Set<string>) => Set<string>) => void;
-  picked: { file: string; obj: RootObject } | null;
-  onPick: (p: { file: string; obj: RootObject }) => void;
+  picked: Picked | null;
+  onPick: (p: Picked) => void;
+  branches: BranchState;
+  loadBranches: (file: string, path: string) => void;
 }) {
-  const { file, objects, expanded, setExpanded, picked, onPick } = props;
+  const { file, objects, expanded, setExpanded, picked, onPick, branches, loadBranches } = props;
   const tree = useMemo(() => buildTree(objects), [objects]);
   const toggle = (key: string) =>
     setExpanded((s) => {
@@ -174,6 +233,7 @@ function RootTree(props: {
       );
     }
     const obj = n.obj;
+    if (obj.kind === "tree") return renderTree(obj, key, depth);
     const drawable = obj.kind === "h1" || obj.kind === "h2" || obj.kind === "graph";
     const active = picked?.file === file && picked.obj.path === obj.path;
     return (
@@ -193,6 +253,41 @@ function RootTree(props: {
         <span className={`icon ${obj.kind}`}>{KIND_ICON[obj.kind] ?? "··"}</span>
         <span className="name">{n.name}</span>
         <span className="cls">{obj.classname}</span>
+      </div>
+    );
+  };
+
+  // A TTree expands into its branches; picking one opens the fill panel.
+  const renderTree = (obj: RootObject, key: string, depth: number): JSX.Element => {
+    const isOpen = expanded.has(key);
+    const state = branches[`${file}:${obj.path}`];
+    return (
+      <div key={key}>
+        <div className="entry obj" style={{ paddingLeft: 12 + depth * 14 }} title={`${obj.classname} · expand to pick a branch`}
+          onClick={() => {
+            toggle(key);
+            if (!isOpen) loadBranches(file, obj.path);
+          }}>
+          <span className="twisty">{isOpen ? "▾" : "▸"}</span>
+          <span className="icon tree">T</span>
+          <span className="name">{obj.path.split("/").pop()}</span>
+          <span className="cls">{obj.classname}</span>
+        </div>
+        {isOpen && state === "loading" && <div className="muted pad">Reading branches…</div>}
+        {isOpen && state && typeof state === "object" && "error" in state && <div className="banner error small">{state.error}</div>}
+        {isOpen && Array.isArray(state) && state.map((b) => {
+          const active = picked?.file === file && picked.obj.path === obj.path && picked.branch === b.name;
+          return (
+            <div key={b.name} className={`entry obj ${active ? "active" : ""}`}
+              style={{ paddingLeft: 12 + (depth + 1) * 14 }} title={`${b.type} · click to fill a histogram`}
+              onClick={() => onPick({ file, obj, branch: b.name })}>
+              <span className="twisty" />
+              <span className="icon branch">{b.jagged ? "[ ]" : "br"}</span>
+              <span className="name">{b.name}</span>
+              <span className="cls">{b.type}</span>
+            </div>
+          );
+        })}
       </div>
     );
   };

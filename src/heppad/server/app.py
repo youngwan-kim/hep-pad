@@ -8,8 +8,10 @@ input paths resolve against (the spec's directory once it has been saved).
 from __future__ import annotations
 
 import os
+import posixpath
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -70,6 +72,8 @@ def create_app(start_dir: Path, open_path: Path | None = None) -> FastAPI:
 
     @app.get("/api/fs")
     def list_dir(dir: str | None = None):
+        if dir and root.is_url(dir):
+            return _list_remote(dir)
         d = Path(dir).expanduser().resolve() if dir else start_dir
         if not d.is_dir():
             raise HTTPException(404, f"not a directory: {d}")
@@ -125,6 +129,20 @@ def create_app(start_dir: Path, open_path: Path | None = None) -> FastAPI:
                 "xmax": float(np.max(obj["x"])) if len(obj["x"]) else 0,
                 "values": [float(v) for v in obj["y"][:100]]}
 
+    @app.get("/api/root/branches")
+    def tree_branches(file: str, path: str):
+        try:
+            return {"branches": root.tree_branches(file, path)}
+        except Exception as exc:
+            raise HTTPException(422, f"cannot read {path} in {file}: {_message(exc)}") from None
+
+    @app.get("/api/root/tree/preview")
+    def tree_preview(file: str, path: str, expr: str, cut: str | None = None):
+        try:
+            return root.tree_preview(file, path, expr, cut or None)
+        except Exception as exc:
+            raise HTTPException(422, _message(exc)) from None
+
     @app.post("/api/render")
     def render_spec(req: SpecRequest):
         spec = _validate(req.spec)
@@ -166,7 +184,8 @@ def create_app(start_dir: Path, open_path: Path | None = None) -> FastAPI:
         spec = _validate(req.spec)
         # Store input paths relative to the spec so the folder can be moved as a whole.
         base = Path(req.base_dir)
-        spec.inputs = {k: _relative(base / v, path.parent) for k, v in spec.inputs.items()}
+        spec.inputs = {k: v if root.is_url(v) else _relative(base / v, path.parent)
+                       for k, v in spec.inputs.items()}
         path.parent.mkdir(parents=True, exist_ok=True)
         spec_io.save(spec, path)
         written = [str(path)]
@@ -229,6 +248,52 @@ def _load_spec(path: Path) -> dict:
     except (ValidationError, ValueError) as exc:
         raise HTTPException(422, _errors(exc)) from None
     return {"path": str(path), "base_dir": str(path.parent), "spec": spec.model_dump(mode="json")}
+
+
+def _list_remote(url: str) -> dict:
+    """Directory listing of a URL through fsspec: folders and ROOT files only."""
+    import fsspec
+
+    try:
+        fs, path = fsspec.core.url_to_fs(url)
+        infos = fs.ls(path, detail=True)
+    except ImportError as exc:
+        raise HTTPException(422, f"{exc} (install hep-pad[remote])") from None
+    except FileNotFoundError:
+        raise HTTPException(404, f"not a directory: {url}") from None
+    except Exception as exc:
+        raise HTTPException(422, f"cannot list {url}: {exc}") from None
+    scheme, netloc, dir_path, _, _ = urlsplit(url)
+
+    def to_url(name: str) -> str:
+        if "://" in name:
+            return name
+        full = fs.unstrip_protocol(name)
+        # Some filesystems (sftp) drop the host from the paths they return.
+        return full if netloc in full else urlunsplit((scheme, netloc, name, "", ""))
+
+    entries = []
+    for info in infos:
+        name = posixpath.basename(info["name"].rstrip("/"))
+        if not name or name.startswith("."):
+            continue
+        if info.get("type") == "directory":
+            kind = "dir"
+        elif name.endswith(".root"):
+            kind = "root"
+        else:
+            continue
+        entries.append({"name": name, "path": to_url(info["name"]), "kind": kind})
+    entries.sort(key=lambda e: (e["kind"] != "dir", e["name"].lower()))
+    parent = posixpath.dirname(dir_path.rstrip("/"))
+    parent_url = urlunsplit((scheme, netloc, parent + "/" if scheme.startswith("http") else parent, "", ""))
+    return {"dir": url, "parent": parent_url if parent and parent != dir_path.rstrip("/") else None,
+            "entries": entries}
+
+
+def _message(exc: Exception) -> str:
+    # str(KeyError) quotes its message; uproot's KeyInFileError formats a full one.
+    return str(exc.args[0]) if type(exc) is KeyError and exc.args else str(exc)
 
 
 def _relative(target: Path, start: Path) -> str:

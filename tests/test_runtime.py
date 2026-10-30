@@ -12,7 +12,7 @@ def fake_inputs(monkeypatch):
     """Serve in-memory histograms to ``load``: values include flow bins."""
     store = {}
 
-    def read(file, path):
+    def read(file, path, tree=None):
         return store[path]
 
     monkeypatch.setattr(rt, "read", read)

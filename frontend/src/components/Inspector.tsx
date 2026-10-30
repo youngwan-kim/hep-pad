@@ -1,5 +1,5 @@
 import { addErrorband, dependents } from "../actions";
-import { BAND_LABELS, contentItems, contentValue, defaultBandLabel, hasSystematics, histLayers, legendLabels } from "../spec";
+import { BAND_LABELS, contentItems, contentValue, defaultBandLabel, expLabel, hasSystematics, histLayers, legendLabels } from "../spec";
 import { useStore } from "../store";
 import type {
   Annotation,
@@ -35,6 +35,7 @@ import {
   TextField,
 } from "./fields";
 import { Breakdown, BreakdownBands, GroupsEditor, SystematicsEditor } from "./Systematics";
+import { TreeRefFields, isTreeRef } from "./TreeFields";
 
 type Setter<T> = <K extends keyof T>(key: K) => (value: T[K]) => void;
 
@@ -64,9 +65,13 @@ export function Inspector() {
     case "xaxis":
     case "yaxis":
       return <AxisForm pad={pad} which={sel.type} />;
+    case "xlabel":
+    case "ylabel":
+      return <AxisForm pad={pad} which={sel.type === "xlabel" ? "xaxis" : "yaxis"} />;
     case "legend":
       return <LegendForm pad={pad} />;
     case "label":
+    case "lumi":
       return pad.label ? <LabelForm pad={pad} label={pad.label} /> : <PadForm pad={pad} />;
     case "annotation": {
       const a = pad.annotations[sel.index];
@@ -108,7 +113,9 @@ function CanvasForm({ spec }: { spec: PlotSpec }) {
           <div key={k} className="kv"><b>{k}</b><span title={v}>{v}</span></div>
         ))}
       </Section>
-      <p className="hint">Click any part of the plot to edit it. Drag the legend or a text box to move it.</p>
+      <p className="hint">Click any part of the plot to edit it. Drag the legend or a text box to move it.
+        Drag the dashed lines at the panel edges to change margins and panel sizes; Shift-drag a line
+        between panels to change the gap.</p>
     </>
   );
 }
@@ -133,10 +140,7 @@ function PadForm({ pad }: { pad: Pad }) {
           hint="Shared pads use the same x range and scale (e.g. a ratio pad)" />
         <CheckField label="Experiment label" value={pad.label !== null}
           onChange={(on) => update((s) => {
-            findPad(s, pad.id).label = on ? {
-              show: true, experiment: "CMS", text: "Preliminary", data: true, lumi: null, com: 13,
-              year: null, loc: 0, rlabel: null, llabel: null, fontsize: null,
-            } : null;
+            findPad(s, pad.id).label = on ? expLabel() : null;
           })} />
       </Section>
       <AxisFields pad={pad} which="xaxis" />
@@ -171,9 +175,19 @@ function AxisFields({ pad, which }: { pad: Pad; which: "xaxis" | "yaxis" }) {
         current={current?.[which === "xaxis" ? "xlim" : "ylim"]} />
       <CheckField label="Log scale" value={rangeAx.log} onChange={setRoot("log")} />
       <CheckField label="Tick labels" value={ax.ticklabels} onChange={set("ticklabels")} />
-      <SelectField label="Title position" value={ax.label_loc}
+      <SelectField label={ax.label_pos ? "Title anchor" : "Title position"} value={ax.label_loc}
+        hint={ax.label_pos ? "Which end of the title sits at the dragged point" : undefined}
         options={which === "xaxis" ? [null, "left", "center", "right"] : [null, "bottom", "center", "top"]}
         onChange={set("label_loc")} />
+      {ax.label_pos ? (
+        <div className="row">
+          <span className="row-label">Placed by hand</span>
+          <span className="row-control">
+            <span className="muted small">({ax.label_pos[0].toFixed(3)}, {ax.label_pos[1].toFixed(3)})</span>
+            <button onClick={() => set("label_pos")(null)}>Reset</button>
+          </span>
+        </div>
+      ) : ax.label && <p className="hint">Drag the title on the plot to place it anywhere.</p>}
     </Section>
   );
 }
@@ -250,6 +264,17 @@ function LabelForm({ pad, label }: { pad: Pad; label: ExpLabel }) {
       <NumberField label="Font size" value={label.fontsize} onChange={set("fontsize")} />
       <TextField label="Right text" value={label.rlabel} onChange={set("rlabel")} placeholder="overrides lumi / √s" />
       <TextField label="Left text" value={label.llabel} onChange={set("llabel")} placeholder="overrides the left label" />
+      {label.offset || label.lumi_offset ? (
+        <div className="row">
+          <span className="row-label">Moved by hand</span>
+          <span className="row-control">
+            {label.offset && <button onClick={() => set("offset")(null)}>Reset {label.experiment} text</button>}
+            {label.lumi_offset && <button onClick={() => set("lumi_offset")(null)}>Reset lumi text</button>}
+          </span>
+        </div>
+      ) : (
+        <p className="hint">Drag the label on the plot to move it; the lumi text on the right moves separately.</p>
+      )}
     </Section>
   );
 }
@@ -268,9 +293,21 @@ function LayerForm({ pad, layer }: { pad: Pad; layer: Layer }) {
   }
 }
 
-function RefInfo({ refs }: { refs: RefLike }) {
+function RefInfo({ refs, onChange }: { refs: RefLike; onChange?: (refs: RefLike) => void }) {
   const inputs = useStore((s) => s.spec!.inputs);
   const list = Array.isArray(refs) ? refs : [refs];
+  if (onChange && isTreeRef(refs))
+    return (
+      <>
+        <div className="refs">
+          {!Array.isArray(refs) && (
+            <div className="kv" title={inputs[refs.file] ?? refs.file}><b>{refs.file}</b><span>{refs.path} (tree)</span></div>
+          )}
+          {list.length > 1 && <span className="muted">summed</span>}
+        </div>
+        <TreeRefFields refs={refs} onChange={onChange} />
+      </>
+    );
   return (
     <div className="refs">
       {list.map((r, i) => (
@@ -322,7 +359,7 @@ function HistogramForm({ pad, layer }: { pad: Pad; layer: HistogramLayer }) {
   return (
     <>
       <Section title={`Histogram “${layer.id}”`}>
-        <RefInfo refs={layer.ref} />
+        <RefInfo refs={layer.ref} onChange={set("ref")} />
         <TextField label="Legend label" value={layer.label} onChange={set("label")} placeholder="(not in legend)" />
         <SelectField label="Draw as" value={layer.histtype}
           options={[{ value: "step", label: "line (step)" }, { value: "fill", label: "filled" }, { value: "errorbar", label: "points with errors" }, { value: "band", label: "band" }]}
@@ -415,7 +452,7 @@ function MemberForm({ pad, layer, index }: { pad: Pad; layer: StackLayer; index:
     <>
       <Section title={`Stack member ${index + 1} of “${layer.id}”`}
         actions={<button className="link" onClick={() => select({ type: "layer", pad: pad.id, layer: layer.id })}>whole stack</button>}>
-        <RefInfo refs={m.ref} />
+        <RefInfo refs={m.ref} onChange={set("ref")} />
         <TextField label="Legend label" value={m.label} onChange={set("label")} />
         <ColorField label="Fill color" value={m.color} onChange={set("color")} />
         <ColorField label="Edge color" value={m.edgecolor} onChange={set("edgecolor")} />
@@ -483,7 +520,7 @@ function Hist2DForm({ pad, layer }: { pad: Pad; layer: Hist2DLayer }) {
   const set = useSetter<Hist2DLayer>((s) => findLayer(s, pad.id, layer.id), layer.id);
   return (
     <Section title={`2D histogram “${layer.id}”`}>
-      <RefInfo refs={layer.ref} />
+      <RefInfo refs={layer.ref} onChange={set("ref")} />
       <SelectField label="Colormap" value={layer.cmap}
         options={[null, "viridis", "plasma", "inferno", "magma", "cividis", "Blues", "Reds", "coolwarm", "RdBu_r", "Greys"]}
         onChange={set("cmap")} />

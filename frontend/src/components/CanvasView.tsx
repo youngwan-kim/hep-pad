@@ -3,6 +3,7 @@ import { addObject, type AddMode } from "../actions";
 import { gidBase, parseGid, selectionGid, type Selection } from "../spec";
 import { useStore } from "../store";
 import type { BBox, PlotSpec, RenderResponse, RootObject } from "../types";
+import { LayoutHandles } from "./LayoutHandles";
 
 export const DRAG_MIME = "application/x-heppad-object";
 export interface DragPayload {
@@ -49,6 +50,7 @@ function padAt(fx: number, fy: number, render: RenderResponse): string | null {
 function draggable(sel: Selection | null, spec: PlotSpec): boolean {
   if (!sel) return false;
   if (sel.type === "legend") return true;
+  if (sel.type === "xlabel" || sel.type === "ylabel" || sel.type === "label" || sel.type === "lumi") return true;
   if (sel.type === "annotation") {
     const a = spec.pads.find((p) => p.id === sel.pad)?.annotations[sel.index];
     return a?.kind === "text";
@@ -186,6 +188,8 @@ export function CanvasView() {
     ? render?.axes[hover.slice(4)]?.bbox
     : hover ? render?.elements[hover]?.bbox : undefined;
   const canDrag = draggable(selection, spec);
+  // Margin and panel-size handles, while the canvas or a pad (rather than something in it) is selected.
+  const showLayout = !!render && !drag && (selection?.type === "canvas" || selection?.type === "pad");
 
   return (
     <div className="canvas-wrap">
@@ -231,6 +235,7 @@ export function CanvasView() {
             {hoverBox && hover !== selGid && !drag && box(hoverBox, "hover-box")}
             {selBox && box(selBox, `selected-box${canDrag ? " draggable" : ""}`)}
             {dropPad && render?.axes[dropPad] && box(render.axes[dropPad].bbox, "drop-box")}
+            {showLayout && <LayoutHandles spec={spec} eff={render!.layout} W={W} H={H} />}
             {render && spec.pads.every((p) => p.layers.length === 0) &&
               Object.entries(render.axes).map(([id, a]) => (
                 <div key={id} className="empty-pad-hint"
@@ -251,13 +256,35 @@ function commitDrag(
   update: (m: (s: PlotSpec) => void, key?: string) => void,
 ) {
   const sel = drag.sel;
-  if (sel.type !== "legend" && sel.type !== "annotation") return;
+  if (!["legend", "annotation", "xlabel", "ylabel", "label", "lumi"].includes(sel.type) || !("pad" in sel)) return;
   const ax = render.axes[sel.pad];
   if (!ax) return;
   const [ax0, ay0, ax1, ay1] = ax.bbox;
   const dxAx = drag.dx / W / (ax1 - ax0);
   const dyAx = -drag.dy / H / (ay1 - ay0); // screen y grows downwards, axes y upwards
   const r4 = (v: number) => Math.round(v * 10000) / 10000;
+
+  if (sel.type === "label" || sel.type === "lumi") {
+    // Shift from mplhep's own placement; the lumi text moves separately.
+    const key = sel.type === "label" ? "offset" : "lumi_offset";
+    update((s) => {
+      const label = s.pads.find((p) => p.id === sel.pad)!.label;
+      if (!label) return;
+      const [x, y] = label[key] ?? [0, 0];
+      label[key] = [r4(x + dxAx), r4(y + dyAx)];
+    });
+    return;
+  }
+
+  if (sel.type === "xlabel" || sel.type === "ylabel") {
+    // Move the title's anchor (where matplotlib put it, or where it was dragged before).
+    const [x, y] = ax[sel.type];
+    update((s) => {
+      const pad = s.pads.find((p) => p.id === sel.pad)!;
+      pad[sel.type === "xlabel" ? "xaxis" : "yaxis"].label_pos = [r4(x + dxAx), r4(y + dyAx)];
+    });
+    return;
+  }
 
   if (sel.type === "legend") {
     const b = render.elements[drag.gid]?.bbox;

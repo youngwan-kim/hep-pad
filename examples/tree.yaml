@@ -1,0 +1,34 @@
+# Histograms filled from a TTree at render time: jagged branches, a cut and a weight,
+# and a 2D map next to it.
+version: 1
+inputs: {sample: sample.root}
+canvas: {width: 16, height: 8}
+layout: {cols: 2}
+pads:
+  - id: pt
+    xaxis: {label: 'Muon $p_T$ [GeV]'}
+    yaxis: {label: Muons, log: true}
+    layers:
+      - id: all
+        kind: histogram
+        ref: {file: sample, path: Events, expr: Muon_pt, bins: [40, 0, 200], weight: weight}
+        label: All muons
+      - id: tight
+        kind: histogram
+        ref: {file: sample, path: Events, expr: Muon_pt, bins: [40, 0, 200], weight: weight,
+              cut: 'nMuon >= 2 && abs(Muon_eta) < 2.4'}
+        histtype: fill
+        alpha: 0.5
+        label: '$\geq 2\mu$, $|\eta| < 2.4$'
+  - id: map
+    col: 1
+    label: {text: Simulation, data: false, lumi: null}
+    xaxis: {label: 'Muon $\eta$'}
+    yaxis: {label: 'Muon $p_T$ [GeV]'}
+    layers:
+      - id: eta_pt
+        kind: hist2d
+        ref: {file: sample, path: Events, expr: Muon_eta, bins: [24, -2.4, 2.4],
+              yexpr: Muon_pt, ybins: [0, 10, 20, 30, 50, 80, 120, 200]}
+        logz: true
+        cbar_label: Muons

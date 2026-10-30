@@ -27,7 +27,7 @@ export const PALETTE = [
 ];
 
 export const axis = (over: Partial<Axis> = {}): Axis => ({
-  label: null, range: null, log: false, label_loc: null, ticklabels: true, ...over,
+  label: null, range: null, log: false, label_loc: null, label_pos: null, ticklabels: true, ...over,
 });
 
 export const legend = (): Legend => ({
@@ -37,7 +37,7 @@ export const legend = (): Legend => ({
 
 export const expLabel = (over: Partial<ExpLabel> = {}): ExpLabel => ({
   show: true, experiment: "CMS", text: "Preliminary", data: true, lumi: null, com: 13,
-  year: null, loc: 0, rlabel: null, llabel: null, fontsize: null, ...over,
+  year: null, loc: 0, rlabel: null, llabel: null, fontsize: null, offset: null, lumi_offset: null, ...over,
 });
 
 export const pad = (id: string, over: Partial<Pad> = {}): Pad => ({
@@ -173,7 +173,7 @@ export type Selection =
   | { type: "layer"; pad: string; layer: string }
   | { type: "member"; pad: string; layer: string; index: number }
   | { type: "annotation"; pad: string; index: number }
-  | { type: "legend" | "label" | "xaxis" | "yaxis"; pad: string };
+  | { type: "legend" | "label" | "lumi" | "xaxis" | "yaxis" | "xlabel" | "ylabel"; pad: string };
 
 /** Strip the "@n" suffix that makes SVG ids unique. */
 export const gidBase = (id: string) => id.replace(/@\d+$/, "");
@@ -186,6 +186,8 @@ export function parseGid(gid: string, spec: PlotSpec): Selection | null {
   const p = spec.pads.find((x) => x.id === padId);
   if (!p) return null;
   if (what === "annotations") return { type: "annotation", pad: padId, index: Number(rest) };
+  if (what === "label" && rest === "lumi") return { type: "lumi", pad: padId };
+  if ((what === "xaxis" || what === "yaxis") && rest === "label") return { type: what === "xaxis" ? "xlabel" : "ylabel", pad: padId };
   if (what === "layers" && rest) {
     for (const l of p.layers) {
       if (rest === l.id) return { type: "layer", pad: padId, layer: l.id };
@@ -208,6 +210,11 @@ export function selectionGid(sel: Selection): string | null {
       return `pads.${sel.pad}.layers.${sel.layer}.members.${sel.index}`;
     case "annotation":
       return `pads.${sel.pad}.annotations.${sel.index}`;
+    case "xlabel":
+    case "ylabel":
+      return `pads.${sel.pad}.${sel.type[0]}axis.label`;
+    case "lumi":
+      return `pads.${sel.pad}.label.lumi`;
     default:
       return `pads.${sel.pad}.${sel.type}`;
   }

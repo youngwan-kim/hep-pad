@@ -3,7 +3,17 @@
 export interface Ref {
   file: string;
   path: string;
+  /** With expr, path is a TTree and the histogram is filled from it at render time. */
+  expr?: string | null;
+  /** [n, lo, hi] or a list of more than three edges. */
+  bins?: number[] | null;
+  cut?: string | null;
+  weight?: string | null;
+  yexpr?: string | null;
+  ybins?: number[] | null;
 }
+
+export type TreeFields = Pick<Ref, "expr" | "bins" | "cut" | "weight" | "yexpr" | "ybins">;
 export type RefLike = Ref | Ref[];
 
 export interface ShapeSyst {
@@ -196,6 +206,8 @@ export interface Axis {
   range: [number, number] | null;
   log: boolean;
   label_loc: string | null;
+  /** Title anchor in axes fraction, when placed by dragging. */
+  label_pos: [number, number] | null;
   ticklabels: boolean;
 }
 
@@ -223,6 +235,9 @@ export interface ExpLabel {
   rlabel: string | null;
   llabel: string | null;
   fontsize: number | null;
+  /** Shifts from mplhep's placement (axes fraction) when dragged: experiment text and lumi text. */
+  offset: [number, number] | null;
+  lumi_offset: [number, number] | null;
 }
 
 export interface Pad {
@@ -288,7 +303,11 @@ export interface EffectiveLayout {
 export interface RenderResponse {
   svg: string;
   elements: Record<string, { bbox: BBox }>;
-  axes: Record<string, { bbox: BBox; xlim: [number, number]; ylim: [number, number]; xlog: boolean; ylog: boolean }>;
+  axes: Record<string, {
+    bbox: BBox; xlim: [number, number]; ylim: [number, number]; xlog: boolean; ylog: boolean;
+    /** Where the axis titles are anchored now, in axes fraction. */
+    xlabel: [number, number]; ylabel: [number, number];
+  }>;
   warnings: string[];
   systematics: Record<string, SystBreakdown>;
   layout: EffectiveLayout;
@@ -323,7 +342,25 @@ export interface FsEntry {
 export interface RootObject {
   path: string;
   classname: string;
-  kind: "h1" | "h2" | "graph" | "dir" | "other";
+  kind: "h1" | "h2" | "graph" | "dir" | "tree" | "other";
+}
+
+export interface Branch {
+  name: string;
+  type: string;
+  jagged: boolean;
+}
+
+export interface TreePreview {
+  entries: number;
+  /** Entries read for the preview (the first ones). */
+  sampled: number;
+  /** Values that passed the cut. */
+  count: number;
+  min?: number;
+  max?: number;
+  bins?: number[];
+  values?: number[];
 }
 
 export interface Preview {

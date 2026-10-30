@@ -3,7 +3,7 @@ import { addText, deleteSelection } from "./actions";
 import { Browser } from "./components/Browser";
 import { CanvasDialog } from "./components/CanvasDialog";
 import { CanvasView } from "./components/CanvasView";
-import { RatioDialog, SaveDialog } from "./components/Dialogs";
+import { OpenRootDialog, RatioDialog, SaveDialog } from "./components/Dialogs";
 import { Inspector } from "./components/Inspector";
 import { MenuBar } from "./components/MenuBar";
 import { Outline } from "./components/Outline";
@@ -54,6 +54,11 @@ export function App() {
       if (cmd && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (s.spec) s.setDialog("save");
+        return;
+      }
+      if (cmd && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        s.setDialog("openFile");
         return;
       }
       if (typing(e) || s.dialog) return;
@@ -124,6 +129,7 @@ export function App() {
       {dialog === "layout" && <CanvasDialog mode="layout" />}
       {dialog === "save" && <SaveDialog />}
       {dialog === "ratio" && <RatioDialog />}
+      {dialog === "openFile" && <OpenRootDialog />}
     </div>
   );
 }

@@ -47,6 +47,50 @@ Every drawn artist is tagged with its spec path (e.g. `pads.main.layers.bkg.memb
 `RenderResult.elements()` returns their bounding boxes. The editor uses this to map
 clicks on the plot back to the spec.
 
+## Histograms from trees
+
+A ref with `expr` fills a histogram from a TTree at render time (`path` is the tree), so
+plots can come straight from ntuples. It works anywhere a histogram ref does (stacks,
+ratios, systematics, remote URLs), and exported scripts fill it the same way:
+
+```yaml
+ref: {file: sample, path: Events, expr: Muon_pt, bins: [40, 0, 200],
+      cut: 'nMuon >= 2 && abs(Muon_eta) < 2.4', weight: genWeight}
+# 2D (hist2d layers): add yexpr and ybins
+ref: {file: sample, path: Events, expr: Muon_eta, bins: [24, -2.4, 2.4],
+      yexpr: Muon_pt, ybins: [0, 10, 20, 30, 50, 80, 120, 200]}
+```
+
+- `bins` is `[n, lo, hi]` or a list of more than three edges. Under/overflow go to flow bins,
+  and a value on a bin's upper edge goes to the next bin, as in ROOT.
+- Expressions are Python over branch names: arithmetic, comparisons, `lo < x < hi`,
+  ROOT-style `&&`, `||`, `!`, numpy functions (`abs`, `sqrt`, `exp`, `log`, `sin`, `where`, …),
+  indexing such as `Muon_pt[:, 0]`, and per-event `sum`, `max`, `min`, `any`, `all`, `count`,
+  `num`. Jagged values, cuts and weights broadcast per event (an event-level cut such as
+  `nMuon >= 2` and an object-level one such as `Muon_pt > 20` both work). Missing values,
+  e.g. `max()` of an event without muons, are skipped.
+- Only branch names and those functions are allowed, but treat a spec from someone else
+  like a script: its expressions are evaluated.
+- In the editor, expand a tree in the browser and click a branch: the panel suggests bins
+  from the first 100k entries, and the Inspector edits expression, cut, weight and bins.
+
+## Remote inputs
+
+An input can be a URL instead of a path, read by uproot through fsspec:
+
+```yaml
+inputs:
+  sample: ssh://me@lxplus.cern.ch/afs/cern.ch/user/m/me/sample.root
+  data: https://example.org/files/data.root
+```
+
+Install the extra with `pip install -e ".[remote]"` (ssh/sftp via paramiko, http(s)
+via aiohttp); `root://` also needs `fsspec-xrootd` and the XRootD Python bindings.
+SSH uses your agent and default keys (paramiko does not read `~/.ssh/config`, so give
+the full user@host). URLs are kept as-is when saving and in exported scripts. In the
+editor, type a folder URL into the browser's path box to browse it. Remote reads are
+cached for 60 s, since there is no cheap way to check whether a remote file changed.
+
 ## Systematic uncertainties (pre-fit)
 
 Histograms and stacks take `systematics`:

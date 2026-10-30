@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, api } from "../api";
 import { addRatio } from "../actions";
 import { axis, histLayers, lineAnnotation, pad as newPad, uniqueId, uniqueLayerId } from "../spec";
 import { useStore } from "../store";
+import type { FsEntry } from "../types";
 
 export function SaveDialog() {
   const store = useStore();
@@ -130,6 +131,153 @@ export function RatioDialog() {
         <div className="modal-actions">
           <button onClick={() => store.setDialog(null)}>Cancel</button>
           <button className="primary" disabled={!num || !den || num === den} onClick={apply}>Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const RECENT_KEY = "hep-pad.recent-remote";
+
+function recentRemote(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRemote(url: string) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify([url, ...recentRemote().filter((u) => u !== url)].slice(0, 8)));
+  } catch {
+    /* storage unavailable: recent list is a convenience only */
+  }
+}
+
+const isUrl = (s: string) => s.includes("://");
+const errorText = (e: unknown) => (e instanceof ApiError ? e.messages.join("; ") : String(e));
+
+interface Listing {
+  dir: string;
+  parent: string | null;
+  entries: FsEntry[];
+}
+
+/** File → Open ROOT file: pick a file on the machine running the editor, or by URL. */
+export function OpenRootDialog() {
+  const store = useStore();
+  const [tab, setTab] = useState<"local" | "remote">("local");
+  const [local, setLocal] = useState(store.baseDir || store.startDir);
+  const [remote, setRemote] = useState(() => recentRemote()[0] ?? "");
+  const [listing, setListing] = useState<Record<"local" | "remote", Listing | null>>({ local: null, remote: null });
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const recent = recentRemote();
+  const path = tab === "local" ? local : remote;
+  const setPath = tab === "local" ? setLocal : setRemote;
+
+  const browse = async (dir: string) => {
+    setBusy("Listing…");
+    setError(null);
+    try {
+      const r = await api.fs(dir);
+      setListing((l) => ({ ...l, [tab]: r }));
+      setPath(r.dir);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // The local tab starts out showing the current folder.
+  useEffect(() => {
+    if (tab === "local" && !listing.local && local) browse(local);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const open = async (file = path.trim()) => {
+    if (!file) return;
+    if (!file.endsWith(".root")) return browse(file);
+    setBusy("Reading…");
+    setError(null);
+    try {
+      const { objects } = await api.rootObjects(file);
+      if (isUrl(file)) rememberRemote(file);
+      store.addOpenFile(file, objects);
+      store.setDialog(null);
+      store.flash(`Opened ${file.split("/").pop()}: ${objects.filter((o) => o.kind !== "dir").length} objects`);
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(null);
+    }
+  };
+
+  const shown = listing[tab];
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && store.setDialog(null)}>
+      <div className="modal">
+        <h2>Open ROOT file</h2>
+        <div className="tabs">
+          <button className={tab === "local" ? "chip active" : "chip"} onClick={() => { setTab("local"); setError(null); }}>This computer</button>
+          <button className={tab === "remote" ? "chip active" : "chip"} onClick={() => { setTab("remote"); setError(null); }}>Remote (URL)</button>
+        </div>
+        <label className="row stacked">
+          <span className="row-label">
+            {tab === "local" ? "File or folder on the machine running the editor" : "URL of a .root file or a folder"}
+          </span>
+          <input value={path} autoFocus spellCheck={false}
+            placeholder={tab === "local" ? "/path/to/file.root" : "ssh://user@host/path/to/file.root"}
+            onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && open()} />
+        </label>
+        {tab === "remote" && (
+          <p className="muted small">
+            <code>ssh://user@host/abs/path</code> (SSH agent or default keys), <code>root://server//path</code> (XRootD),
+            or <code>https://…</code>. A folder URL lists its .root files.
+          </p>
+        )}
+        {tab === "remote" && recent.length > 0 && !shown && (
+          <>
+            <h3>Recent</h3>
+            <div className="file-list">
+              {recent.map((u) => (
+                <div key={u} className="entry" title={u} onClick={() => setRemote(u)} onDoubleClick={() => open(u)}>
+                  <span className="icon root">R</span><span className="name">{u}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {shown && (
+          <div className="file-list">
+            <div className="entry" title={shown.dir}>
+              <button className="small" disabled={!shown.parent || !!busy} title="Parent folder"
+                onClick={() => shown.parent && browse(shown.parent)}>↑</button>
+              <span className="name muted">{shown.dir}</span>
+            </div>
+            {shown.entries.filter((e) => e.kind !== "spec").map((e) => (
+              <div key={e.path} className={`entry ${e.kind} ${e.path === path ? "active" : ""}`} title={e.path}
+                onClick={() => (e.kind === "dir" ? browse(e.path) : setPath(e.path))}
+                onDoubleClick={() => e.kind === "root" && open(e.path)}>
+                <span className={`icon ${e.kind}`}>{e.kind === "dir" ? "▤" : "R"}</span>
+                <span className="name">{e.name}</span>
+              </div>
+            ))}
+            {shown.entries.every((e) => e.kind === "spec") && <p className="muted pad">No folders or .root files here.</p>}
+          </div>
+        )}
+        {error && <div className="banner error small">{error}</div>}
+        <div className="modal-actions">
+          {busy && <span className="muted small busy">{busy}</span>}
+          {tab === "remote" && (
+            <button disabled={!!busy || !remote.trim()} onClick={() => browse(remote.endsWith(".root") ? remote.slice(0, remote.lastIndexOf("/") + 1) : remote)}>
+              Browse folder
+            </button>
+          )}
+          <button onClick={() => store.setDialog(null)}>Cancel</button>
+          <button className="primary" disabled={!!busy || !path.endsWith(".root")} onClick={() => open()}>Open</button>
         </div>
       </div>
     </div>

@@ -29,12 +29,13 @@ export function MenuBar() {
     store.setDialog("new");
   };
   const sel = store.selection;
-  const canDelete = !!sel && !["canvas", "pad", "xaxis", "yaxis"].includes(sel.type);
+  const canDelete = !!sel && !["canvas", "pad", "xaxis", "yaxis", "xlabel", "ylabel", "lumi"].includes(sel.type);
 
   const menus: Record<string, Entry[]> = {
     File: [
       { label: "New canvas…", action: newCanvas },
       { label: "Open…", action: () => store.flash("Double-click a .yaml plot file in the browser on the left to open it") },
+      { label: "Open ROOT file…", shortcut: `${mod}O`, action: () => store.setDialog("openFile") },
       "-",
       { label: "Save", shortcut: `${mod}S`, action: () => store.setDialog("save"), disabled: !hasDoc },
       "-",

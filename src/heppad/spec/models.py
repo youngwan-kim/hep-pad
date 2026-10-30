@@ -25,11 +25,47 @@ class Ref(_Model):
     """Reference to an object in a ROOT file.
 
     ``file`` is either a key of ``PlotSpec.inputs`` or a path relative to the
-    spec file's directory.
+    spec file's directory. With ``expr``, ``path`` names a TTree and the
+    histogram is filled from it at render time: ``expr`` (and ``yexpr`` for 2D),
+    ``cut`` and ``weight`` are uproot expressions; ``bins``/``ybins`` are
+    ``[n, lo, hi]`` or a list of more than three edges.
     """
 
     file: str
     path: str
+    expr: str | None = None
+    bins: list[int | float] | None = None
+    cut: str | None = None
+    weight: str | None = None
+    yexpr: str | None = None
+    ybins: list[int | float] | None = None
+
+    @model_validator(mode="after")
+    def _check_tree(self) -> "Ref":
+        if self.expr is None:
+            extra = [k for k in ("bins", "cut", "weight", "yexpr", "ybins") if getattr(self, k) is not None]
+            if extra:
+                raise ValueError(f"{', '.join(extra)} only apply to tree refs (set expr)")
+            return self
+        for axis, bins in (("bins", self.bins), ("ybins", self.ybins)):
+            if axis == "ybins" and self.yexpr is None:
+                if bins is not None:
+                    raise ValueError("ybins needs yexpr")
+                continue
+            if bins is None:
+                raise ValueError(f"{axis} is required with {'yexpr' if axis == 'ybins' else 'expr'}")
+            if len(bins) == 3:
+                n, lo, hi = bins
+                if n < 1 or n != int(n) or not lo < hi:
+                    raise ValueError(f"{axis} [n, lo, hi] needs a whole n >= 1 and lo < hi")
+            elif len(bins) < 3 or any(a >= b for a, b in zip(bins, bins[1:])):
+                raise ValueError(f"{axis} must be [n, lo, hi] or more than three increasing edges")
+        return self
+
+    def tree(self) -> dict:
+        """The tree-filling parameters passed to ``runtime.read_tree``."""
+        return {k: getattr(self, k) for k in ("expr", "bins", "cut", "weight", "yexpr", "ybins")
+                if getattr(self, k) is not None}
 
 
 # A single ref, or a list of refs that are summed bin by bin.
@@ -286,6 +322,9 @@ class Axis(_Model):
     range: tuple[float, float] | None = None
     log: bool = False
     label_loc: Literal["left", "center", "right", "top", "bottom"] | None = None
+    # Title anchor in axes fraction, placed by hand (matplotlib set_label_coords);
+    # ``label_loc`` still sets which end of the title sits there.
+    label_pos: tuple[float, float] | None = None
     ticklabels: bool = True
 
 
@@ -316,6 +355,10 @@ class ExpLabel(_Model):
     rlabel: str | None = None
     llabel: str | None = None
     fontsize: float | None = None
+    # Shifts from mplhep's placement, in axes fraction, when dragged by hand: the
+    # experiment text ("CMS Preliminary") and the lumi/energy text move separately.
+    offset: tuple[float, float] | None = None
+    lumi_offset: tuple[float, float] | None = None
 
 
 class Pad(_Model):

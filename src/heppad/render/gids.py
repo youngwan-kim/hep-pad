@@ -81,6 +81,11 @@ def collect_elements(fig: Figure, tagger: Tagger, pads: dict[str, Axes]) -> dict
         if boxes:
             elements[gid] = {"bbox": frac(Bbox.union(boxes))}
 
+    def anchor(ax: Axes, label) -> list[float]:
+        """Where an axis title is anchored, in axes fraction (as set_label_coords takes it)."""
+        display = label.get_transform().transform(label.get_position())
+        return [round(float(v), 5) for v in ax.transAxes.inverted().transform(display)]
+
     axes = {
         name: {
             "bbox": frac(ax.get_window_extent(renderer)),
@@ -88,6 +93,8 @@ def collect_elements(fig: Figure, tagger: Tagger, pads: dict[str, Axes]) -> dict
             "ylim": [float(v) for v in ax.get_ylim()],
             "xlog": ax.get_xscale() == "log",
             "ylog": ax.get_yscale() == "log",
+            "xlabel": anchor(ax, ax.xaxis.label),
+            "ylabel": anchor(ax, ax.yaxis.label),
         }
         for name, ax in pads.items()
     }

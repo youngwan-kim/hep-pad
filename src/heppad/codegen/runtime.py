@@ -18,8 +18,13 @@ INPUTS = {}  # set by the script
 Hist1D = namedtuple("Hist1D", "edges values variances")
 
 
-def read(file, path):
-    """Read a TH1, TH2 or TGraph into a dict of numpy arrays (flow bins included)."""
+def read(file, path, tree=None):
+    """Read a TH1, TH2 or TGraph into a dict of numpy arrays (flow bins included).
+
+    With ``tree``, ``path`` is a TTree and the histogram is filled from it (see ``read_tree``).
+    """
+    if tree is not None:
+        return read_tree(file, path, tree)
     with uproot.open(file) as f:
         obj = f[path]
         cls = obj.classname
@@ -43,17 +48,130 @@ def read(file, path):
         raise TypeError(f"{path!r} is a {cls}; expected TH1, TH2 or TGraph")
 
 
-def load(key, path, kind):
+def tree_columns(ttree, exprs, entry_stop=None):
+    """Evaluate expressions of a TTree's branches chunk by chunk.
+
+    Yields one list of awkward arrays (one per expression) per chunk. Expressions
+    are Python with branch names, a few numpy/awkward functions, and ROOT-style
+    ``&&``, ``||``, ``!``, which act elementwise like ``&``, ``|``, ``~`` but keep
+    their low precedence (``a > 1 && b < 2``); ``lo < x < hi`` also works.
+    """
+    import ast
+    import functools
+    import re
+
+    import awkward as ak
+
+    funcs = {name: getattr(np, name) for name in (
+        "abs", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "arctan2", "sinh", "cosh",
+        "tanh", "minimum", "maximum", "where", "pi")}
+    for name in ("sum", "max", "min", "any", "all", "count"):
+        funcs[name] = functools.partial(getattr(ak, name), axis=-1)  # per event
+    funcs["num"] = functools.partial(ak.num, axis=-1)
+    branches = set(ttree.keys(recursive=True))
+    where = ttree.object_path.split(";")[0].lstrip("/")
+    aliases = {}
+
+    def alias(branch):
+        return aliases.setdefault(branch, f"_b{len(aliases)}")
+
+    def chain(op, values):
+        return functools.reduce(lambda a, b: ast.BinOp(a, op, b), values)
+
+    class Compile(ast.NodeTransformer):
+        def visit_BoolOp(self, node):
+            self.generic_visit(node)
+            return chain(ast.BitAnd() if isinstance(node.op, ast.And) else ast.BitOr(), node.values)
+
+        def visit_UnaryOp(self, node):
+            self.generic_visit(node)
+            return ast.UnaryOp(ast.Invert(), node.operand) if isinstance(node.op, ast.Not) else node
+
+        def visit_Compare(self, node):
+            self.generic_visit(node)
+            sides = [node.left, *node.comparators]
+            pairs = [ast.Compare(a, [op], [b]) for a, op, b in zip(sides, node.ops, sides[1:])]
+            return pairs[0] if len(pairs) == 1 else chain(ast.BitAnd(), pairs)
+
+        def visit_Attribute(self, node):  # dotted branch names, e.g. "Muon.pt"
+            name = ast.unparse(node)
+            if name not in branches:
+                raise KeyError(f"no branch {name!r} in tree {where!r}")
+            return ast.Name(alias(name), ast.Load())
+
+        def visit_Name(self, node):
+            if node.id in branches:
+                return ast.Name(alias(node.id), ast.Load())
+            if node.id in funcs:
+                return node
+            raise KeyError(f"no branch {node.id!r} in tree {where!r}")
+
+    codes = []
+    for expr in exprs:
+        text = re.sub(r"!(?!=)", " not ", expr.replace("&&", " and ").replace("||", " or "))
+        try:
+            parsed = ast.parse(text.strip(), mode="eval")
+        except SyntaxError as exc:
+            raise ValueError(f"cannot parse expression {expr!r}: {exc.msg}") from None
+        codes.append(compile(ast.fix_missing_locations(Compile().visit(parsed)), expr, "eval"))
+    if not aliases:
+        raise ValueError(f"expressions {exprs} use no branches of {where!r}")
+    for chunk in ttree.iterate(list(aliases), library="ak", how=dict, step_size="100 MB",
+                               entry_stop=entry_stop):
+        names = {**funcs, **{aliases[b]: chunk[b] for b in aliases}}
+        yield [eval(code, {"__builtins__": {}}, names) for code in codes]
+
+
+def read_tree(file, path, tree):
+    """Fill a histogram from the TTree ``path``, as ROOT's TTree::Draw would.
+
+    ``tree`` holds ``expr``, ``bins`` and optionally ``cut``, ``weight`` (see
+    ``tree_columns``) and ``yexpr``/``ybins`` for 2D. ``bins`` is ``[n, lo, hi]`` or a
+    list of edges. Jagged values, cuts and weights broadcast against each other per event.
+    """
+    import awkward as ak
+
+    def edges(bins):
+        return np.linspace(bins[1], bins[2], int(bins[0]) + 1) if len(bins) == 3 else np.asarray(bins, float)
+
+    axes = [tree["expr"]] + ([tree["yexpr"]] if tree.get("yexpr") else [])
+    all_edges = [edges(tree["bins"])] + ([edges(tree["ybins"])] if len(axes) == 2 else [])
+    shape = tuple(len(e) + 1 for e in all_edges)  # regular bins plus under- and overflow
+    values, variances = np.zeros(shape).ravel(), np.zeros(shape).ravel()
+    exprs = [*axes, tree.get("cut") or "True", tree.get("weight") or "1.0"]
+    with uproot.open(file) as f:
+        for *cols, keep, w in tree_columns(f[path], exprs):
+            *cols, keep, w = ak.broadcast_arrays(*cols, keep, w)
+            # Missing values (e.g. max() of an event without muons) are skipped, like cut ones.
+            keep = ak.fill_none(keep, False)
+            for col in cols:
+                keep = keep & ~ak.is_none(col, axis=-1)
+            w = ak.to_numpy(ak.flatten(w[keep], axis=None)).astype(np.float64)
+            # Bin i covers [edge[i-1], edge[i]); bin 0 is underflow, the last is overflow.
+            index = np.zeros(len(w), dtype=np.int64)
+            for col, e, n in zip(cols, all_edges, shape):
+                x = ak.to_numpy(ak.flatten(col[keep], axis=None)).astype(np.float64)
+                index = index * n + np.searchsorted(e, x, side="right")
+            values += np.bincount(index, weights=w, minlength=values.size)
+            variances += np.bincount(index, weights=w**2, minlength=values.size)
+    values, variances = values.reshape(shape), variances.reshape(shape)
+    if len(axes) == 2:
+        return {"kind": "h2", "xedges": all_edges[0], "yedges": all_edges[1],
+                "values": values, "variances": variances}
+    return {"kind": "h1", "edges": all_edges[0], "values": values, "variances": variances}
+
+
+def load(key, path, kind, tree=None):
     file = INPUTS.get(key, key)
-    obj = read(file if BASE is None else BASE / file, path)
+    obj = read(file if BASE is None or "://" in file else BASE / file, path, tree)
     if obj["kind"] != kind:
         raise TypeError(f"{path!r} is a {obj['kind']}, expected {kind}")
     return obj
 
 
 def hist1d(refs, flow="none", rebin=None, xrange=None, scale=1.0, normalize=False):
-    """Sum the 1D histograms ``refs`` [(input, path), ...] and apply the given operations."""
-    objs = [load(key, path, "h1") for key, path in refs]
+    """Sum the 1D histograms ``refs`` [(input, path[, tree]), ...] and apply the given operations."""
+    objs = [load(ref[0], ref[1], "h1", *ref[2:]) for ref in refs]
     edges = objs[0]["edges"]
     for o in objs[1:]:
         if len(o["edges"]) != len(edges) or not np.allclose(o["edges"], edges):
@@ -123,7 +241,7 @@ def pull(num, den):
 
 def hist2d(refs, scale=1.0, cmin=None):
     """Sum 2D histograms; returns (xedges, yedges, values) without flow bins."""
-    objs = [load(key, path, "h2") for key, path in refs]
+    objs = [load(ref[0], ref[1], "h2", *ref[2:]) for ref in refs]
     values = np.sum([o["values"] for o in objs], axis=0)[1:-1, 1:-1] * scale
     if cmin is not None:
         values = np.where(values < cmin, np.nan, values)
@@ -133,7 +251,7 @@ def hist2d(refs, scale=1.0, cmin=None):
 def object_paths(key):
     """Paths of all objects in an input file."""
     file = INPUTS.get(key, key)
-    with uproot.open(file if BASE is None else BASE / file) as f:
+    with uproot.open(file if BASE is None or "://" in file else BASE / file) as f:
         return list(f.classnames(cycle=False, recursive=True))
 
 
@@ -174,7 +292,7 @@ def systematics(components, common=(), symmetrize="none"):
         nominal_values = nominal.values * factor
 
         def varied(file, template, label, **extra):
-            refs = [(file or key, fill(template, path, **extra)) for key, path in comp["refs"]]
+            refs = [(file or key, fill(template, path, **extra), *tree) for key, path, *tree in comp["refs"]]
             try:
                 return hist1d(refs, **raw).values * factor - nominal_values
             except KeyError:  # the variation does not exist for this component
@@ -289,6 +407,8 @@ DEPENDS = {
     "hist1d": ["load", "Hist1D"],
     "hist2d": ["load"],
     "load": ["read"],
+    "read": ["read_tree"],
+    "read_tree": ["tree_columns"],
     "add": ["Hist1D"],
     "systematics": ["hist1d", "object_paths", "Syst"],
     "band_errors": ["group_sources"],

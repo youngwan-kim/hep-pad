@@ -7,6 +7,7 @@ import {
   allLayers,
   hasSystematics,
   basename,
+  expLabel,
   graph,
   hist2d,
   histogram,
@@ -17,7 +18,7 @@ import {
   textAnnotation,
   uniqueLayerId,
 } from "./spec";
-import type { BandContent, Layer, Pad, PlotSpec, RootObject } from "./types";
+import type { BandContent, Layer, Pad, PlotSpec, RootObject, TreeFields } from "./types";
 
 export type AddMode = "auto" | "step" | "fill" | "data" | "stack";
 
@@ -39,24 +40,29 @@ export function targetPad(spec: PlotSpec, padId?: string): Pad {
   return spec.pads.find((p) => p.id === id) ?? spec.pads[0];
 }
 
-/** Draw a ROOT object from the browser into a pad. */
-export function addObject(file: string, obj: RootObject, mode: AddMode = "auto", padId?: string) {
+/** Draw a ROOT object from the browser into a pad. With ``tree``, ``obj`` is a TTree
+ *  and the histogram is filled from it (2D when ``tree.yexpr`` is set). */
+export function addObject(file: string, obj: RootObject, mode: AddMode = "auto", padId?: string, tree?: TreeFields) {
   const { spec } = store();
   if (!spec) return;
-  if (obj.kind !== "h1" && obj.kind !== "h2" && obj.kind !== "graph") {
+  const kind = tree ? (tree.yexpr ? "h2" : "h1") : obj.kind;
+  if (kind !== "h1" && kind !== "h2" && kind !== "graph") {
     store().flash(`${obj.classname} objects cannot be drawn`);
     return;
   }
   let selectAfter: { pad: string; layer: string; member?: number } | null = null;
   store().update((s) => {
     const p = targetPad(s, padId);
-    const ref = { file: inputFor(s, file), path: obj.path };
-    const name = basename(obj.path);
-    if (obj.kind === "h2") {
+    const ref = { file: inputFor(s, file), path: obj.path, ...tree };
+    // A layer id from the expression, e.g. "max(Muon_pt)" -> "max_Muon_pt".
+    const name = tree?.expr
+      ? [tree.yexpr, tree.expr].filter(Boolean).join("_vs_").replace(/\W+/g, "_").replace(/^_|_$/g, "") || "tree"
+      : basename(obj.path);
+    if (kind === "h2") {
       const id = uniqueLayerId(s, name);
       p.layers.push(hist2d(id, ref));
       selectAfter = { pad: p.id, layer: id };
-    } else if (obj.kind === "graph") {
+    } else if (kind === "graph") {
       const id = uniqueLayerId(s, name);
       p.layers.push(graph(id, ref, { label: name, color: nextColor(s) }));
       selectAfter = { pad: p.id, layer: id };
@@ -147,10 +153,7 @@ export function addErrorband(of: string) {
 export function toggleLabel(padId: string) {
   store().update((s) => {
     const p = s.pads.find((x) => x.id === padId)!;
-    p.label = p.label ? null : {
-      show: true, experiment: "CMS", text: "Preliminary", data: true, lumi: null, com: 13,
-      year: null, loc: 0, rlabel: null, llabel: null, fontsize: null,
-    };
+    p.label = p.label ? null : expLabel();
   });
 }
 

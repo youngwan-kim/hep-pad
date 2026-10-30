@@ -155,10 +155,16 @@ def render(spec: PlotSpec, base_dir: str | Path = ".") -> RenderResult:
                     tagger.tag(artists, f"{seg.gid}.members.{i}")
             for ax in fig.axes:
                 if ax in before:
-                    tagger.tag(children(ax) - before[ax], seg.gid)
+                    new = children(ax) - before[ax]
+                    if seg.kind == "label":  # the lumi text drags apart from "CMS Preliminary"
+                        tagger.tag([a for a in new if type(a).__name__ == "LumiText"], f"{seg.gid}.lumi")
+                    tagger.tag(new, seg.gid)
                 else:
                     tagger.tag([ax], seg.gid)  # e.g. a colorbar's axes
         for pad_id, ax in pads.items():
+            # Titles first, so they can be picked (and dragged) apart from their axis.
+            tagger.tag([ax.xaxis.label], f"pads.{pad_id}.xaxis.label")
+            tagger.tag([ax.yaxis.label], f"pads.{pad_id}.yaxis.label")
             tagger.tag([ax.xaxis], f"pads.{pad_id}.xaxis")
             tagger.tag([ax.yaxis], f"pads.{pad_id}.yaxis")
 

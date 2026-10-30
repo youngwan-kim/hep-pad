@@ -1,4 +1,5 @@
 import type {
+  Branch,
   EffectiveLayout,
   FsEntry,
   LoadedSpec,
@@ -6,6 +7,7 @@ import type {
   Preview,
   RenderResponse,
   RootObject,
+  TreePreview,
 } from "./types";
 
 export class ApiError extends Error {
@@ -50,6 +52,10 @@ export const api = {
     ),
   rootObjects: (file: string) => request<{ objects: RootObject[] }>(`/api/root?${q({ file })}`),
   preview: (file: string, path: string) => request<Preview>(`/api/root/preview?${q({ file, path })}`),
+  branches: (file: string, path: string) =>
+    request<{ branches: Branch[] }>(`/api/root/branches?${q({ file, path })}`),
+  treePreview: (file: string, path: string, expr: string, cut: string | null) =>
+    request<TreePreview>(`/api/root/tree/preview?${q(cut ? { file, path, expr, cut } : { file, path, expr })}`),
   render: (spec: PlotSpec, base_dir: string, signal?: AbortSignal) =>
     request<RenderResponse>("/api/render", post({ spec, base_dir }, signal)),
   loadSpec: (path: string) => request<LoadedSpec>(`/api/spec?${q({ path })}`),

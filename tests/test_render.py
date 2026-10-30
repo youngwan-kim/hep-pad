@@ -80,7 +80,8 @@ def test_legend_order(workdir):
 def test_label_text(workdir):
     spec = hw.load(workdir / "datamc.yaml")
     result = hw.render(spec, workdir)
-    texts = [a.get_text() for a in result.tagger.tagged["pads.main.label"]]
+    texts = [a.get_text() for gid in ("pads.main.label", "pads.main.label.lumi")
+             for a in result.tagger.tagged[gid]]
     assert "Preliminary" in texts
     assert any(t.startswith("138 ") and "(13 TeV)" in t for t in texts), texts
 
@@ -175,3 +176,44 @@ def test_band_lines_style_and_relative(workdir):
     for a in artists:
         values = a.get_data().values
         assert 0.8 < float(values[30]) < 1.2
+
+
+def test_axis_titles_are_tagged_and_anchored(workdir):
+    spec = hw.load(workdir / "datamc.yaml")
+    info = hw.render(spec, workdir).elements()
+    assert "pads.ratio.xaxis.label" in info["elements"] and "pads.main.yaxis.label" in info["elements"]
+    # Placing a title at its reported anchor leaves it exactly where it was.
+    spec.pad("ratio").xaxis.label_pos = tuple(info["axes"]["ratio"]["xlabel"])
+    spec.pad("main").yaxis.label_pos = tuple(info["axes"]["main"]["ylabel"])
+    again = hw.render(spec, workdir).elements()
+    for gid in ("pads.ratio.xaxis.label", "pads.main.yaxis.label"):
+        assert again["elements"][gid]["bbox"] == info["elements"][gid]["bbox"]
+
+
+def test_dragged_axis_title_moves(workdir):
+    spec = hw.load(workdir / "datamc.yaml")
+    before = hw.render(spec, workdir).elements()
+    x, y = before["axes"]["ratio"]["xlabel"]
+    spec.pad("ratio").xaxis.label_pos = (x - 0.5, y)  # half the pad width to the left
+    after = hw.render(spec, workdir).elements()
+    b0, b1 = before["elements"]["pads.ratio.xaxis.label"]["bbox"], after["elements"]["pads.ratio.xaxis.label"]["bbox"]
+    pad_w = before["axes"]["ratio"]["bbox"][2] - before["axes"]["ratio"]["bbox"][0]
+    assert b1[0] == pytest.approx(b0[0] - 0.5 * pad_w, abs=1e-3) and b1[1] == pytest.approx(b0[1], abs=1e-3)
+    assert after["axes"]["ratio"]["xlabel"] == pytest.approx([x - 0.5, y], abs=1e-4)
+
+
+@pytest.mark.parametrize("experiment", ["CMS", "ATLAS", "LHCb", "ALICE"])
+def test_label_parts_move_separately(workdir, experiment):
+    spec = hw.load(workdir / "datamc.yaml")
+    spec.pad("main").label.experiment = experiment
+    before = hw.render(spec, workdir).elements()
+    assert "pads.main.label" in before["elements"]
+    # ALICE's label has no lumi text; the others have one to drag separately.
+    assert ("pads.main.label.lumi" in before["elements"]) == (experiment != "ALICE")
+    spec.pad("main").label.offset = (0.1, -0.2)
+    after = hw.render(spec, workdir).elements()
+    x0, y0, x1, y1 = before["axes"]["main"]["bbox"]
+    moved = [b - a for a, b in zip(before["elements"]["pads.main.label"]["bbox"],
+                                   after["elements"]["pads.main.label"]["bbox"])]
+    assert moved == pytest.approx([0.1 * (x1 - x0), 0.2 * (y1 - y0)] * 2, abs=2e-4)
+    assert after["elements"].get("pads.main.label.lumi") == before["elements"].get("pads.main.label.lumi")

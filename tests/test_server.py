@@ -35,6 +35,18 @@ def test_root_listing_and_preview(client, workdir):
     assert prev["nbins"] == 60 and len(prev["values"]) == 60 and prev["integral"] > 0
 
 
+def test_tree_endpoints(client, workdir):
+    f = str(workdir / "sample.root")
+    objs = {o["path"]: o["kind"] for o in client.get("/api/root", params={"file": f}).json()["objects"]}
+    assert objs["Events"] == "tree"
+    branches = client.get("/api/root/branches", params={"file": f, "path": "Events"}).json()["branches"]
+    assert [b["name"] for b in branches] == ["mass", "weight", "nMuon", "Muon_pt", "Muon_eta"]
+    prev = client.get("/api/root/tree/preview", params={"file": f, "path": "Events", "expr": "Muon_pt"}).json()
+    assert prev["bins"] == [50, 0, 400] and len(prev["values"]) == 50
+    bad = client.get("/api/root/tree/preview", params={"file": f, "path": "Events", "expr": "nope"})
+    assert bad.status_code == 422 and bad.json()["detail"] == "no branch 'nope' in tree 'Events'"
+
+
 def test_render(client, workdir, datamc):
     r = client.post("/api/render", json={"spec": datamc, "base_dir": str(workdir)}).json()
     assert r["svg"].startswith("<svg") and 'id="pads.main.legend"' in r["svg"]

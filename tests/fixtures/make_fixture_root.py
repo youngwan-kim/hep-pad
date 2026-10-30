@@ -8,6 +8,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import awkward as ak
 import hist
 import numpy as np
 import pandas as pd
@@ -38,7 +39,8 @@ def make(path: Path = DEFAULT) -> Path:
     centers = h_dy.axes[0].centers
     data = np.repeat(centers, rng.poisson(expected))
     h_data = hist.Hist.new.Reg(60, 60, 120, name="mass").Double()
-    h_data.fill(data + rng.uniform(-0.5, 0.5, data.size))
+    data_mass = data + rng.uniform(-0.5, 0.5, data.size)
+    h_data.fill(data_mass)
 
     h2 = hist.Hist.new.Reg(20, -2.5, 2.5, name="eta").Reg(20, 0, 100, name="pt").Weight()
     eta, pt = rng.normal(0, 1.2, 20_000), rng.exponential(25, 20_000)
@@ -72,6 +74,19 @@ def make(path: Path = DEFAULT) -> Path:
     for i, (a, b) in enumerate([(0.9, 0.0), (1.1, 0.0), (0.95, 0.001), (1.05, -0.001), (0.92, 0.002), (1.08, -0.002)]):
         variations[f"mc/tt/h_mass_scale{i}"] = _mass_hist(tt, np.full(tt.size, lumi_weight) * (a + b * (tt - 90)))
 
+    # An ntuple of the data events (so a tree histogram of "mass" equals data/h_mass),
+    # with per-event weights and jagged muon branches. Separate generator: the
+    # histograms above stay exactly as they were.
+    trng = np.random.default_rng(7)
+    n_muon = trng.poisson(1.5, data_mass.size)
+    total = int(n_muon.sum())
+    events = {
+        "mass": data_mass,
+        "weight": trng.uniform(0.5, 1.5, data_mass.size),
+        "Muon": ak.zip({"pt": ak.unflatten(trng.exponential(30, total), n_muon),
+                        "eta": ak.unflatten(trng.normal(0, 1.2, total), n_muon)}),
+    }
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with uproot.recreate(path) as f:
         f["data/h_mass"] = h_data
@@ -80,6 +95,8 @@ def make(path: Path = DEFAULT) -> Path:
         f["mc/vv/h_mass"] = h_vv
         f["mc/dy/h_eta_pt"] = h2
         f["eff/g_trig"] = uproot.as_TGraph(graph)
+        # NanoAOD-style names: Muon_pt, Muon_eta with counter nMuon.
+        f.mktree("Events", events, field_name=lambda outer, inner: f"{outer}_{inner}")
         for key, h in variations.items():
             f[key] = h
     return path

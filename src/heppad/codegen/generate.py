@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..data.root import is_url
 from ..spec import models as m
 from . import runtime
 
@@ -132,12 +133,15 @@ def generate(
 
     Input paths are resolved against ``base_dir`` (the spec's directory). With
     ``script_dir`` they are written relative to where the script will live;
-    otherwise they are absolute.
+    otherwise they are absolute. URLs are kept as they are.
     """
     gen = _Generator(spec)
     gen.run()
     inputs = {}
     for key in gen.input_keys:
+        if is_url(spec.inputs.get(key, key)):
+            inputs[key] = spec.inputs.get(key, key)
+            continue
         path = Path(spec.inputs.get(key, key)).expanduser()
         if not path.is_absolute():
             path = Path(base_dir).resolve() / path
@@ -158,7 +162,7 @@ def generate(
 
 
 def _with_dependencies(names: set[str]) -> list[str]:
-    order = ["Hist1D", "Syst", "read", "load", "hist1d", "add", "auto_yerr", "ratio", "pull",
+    order = ["Hist1D", "Syst", "tree_columns", "read_tree", "read", "load", "hist1d", "add", "auto_yerr", "ratio", "pull",
              "hist2d", "object_paths", "systematics", "group_sources", "band_errors", "sort_legend"]
     needed, todo = set(), list(names)
     while todo:
@@ -219,7 +223,8 @@ class _Generator:
         for r in refs:
             if r.file not in self.input_keys:
                 self.input_keys.append(r.file)
-        return Code(lit([(r.file, r.path) for r in refs]))
+        return Code(lit([(r.file, r.path) if r.expr is None else (r.file, r.path, r.tree())
+                         for r in refs]))
 
     # -- setup
 
@@ -549,9 +554,11 @@ class _Generator:
             lines.append(f'{ax}.set_yscale("log")')
         if pad.yaxis.range:
             lines.append(call(f"{ax}.set_ylim", *pad.yaxis.range))
-        for axis, setter in ((pad.xaxis, "set_xlabel"), (pad.yaxis, "set_ylabel")):
+        for axis, name in ((pad.xaxis, "x"), (pad.yaxis, "y")):
             if axis.label is not None:
-                lines.append(call(f"{ax}.{setter}", axis.label, loc=axis.label_loc))
+                lines.append(call(f"{ax}.set_{name}label", axis.label, loc=axis.label_loc))
+                if axis.label_pos is not None:
+                    lines.append(call(f"{ax}.{name}axis.set_label_coords", *axis.label_pos))
         if not pad.xaxis.ticklabels:
             lines.append(f'{ax}.tick_params(axis="x", labelbottom=False)')
         if not pad.yaxis.ticklabels:
@@ -564,12 +571,25 @@ class _Generator:
         if not label.data and text.startswith("Simulation"):
             # mplhep already prepends "Simulation" when data=False.
             text = text[len("Simulation"):].lstrip()
-        return "\n".join([
+        lines = [
             f"plt.sca({ax})  # mplhep's label placement measures against the current axes",
             call(LABEL_FUNCS[label.experiment], ax=Code(ax), text=text, data=label.data,
                  lumi=label.lumi, com=label.com, year=label.year, loc=label.loc,
                  rlabel=label.rlabel, llabel=label.llabel, fontsize=label.fontsize),
-        ])
+        ]
+        shifts = {}
+        if label.offset:
+            shifts.update(ExpLabel=label.offset, ExpText=label.offset)
+        if label.lumi_offset:
+            shifts["LumiText"] = label.lumi_offset
+        if shifts:
+            lines += [
+                f"label_shift = {lit(shifts)}  # label moved by hand (axes fraction)",
+                f"for t in {ax}.texts:",
+                "    dx, dy = label_shift.get(type(t).__name__, (0, 0))",
+                "    t.set_position((t.get_position()[0] + dx, t.get_position()[1] + dy))",
+            ]
+        return "\n".join(lines)
 
     def legend(self, pad: m.Pad) -> str:
         lg, ax = pad.legend, self.ax[pad.id]

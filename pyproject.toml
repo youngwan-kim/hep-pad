@@ -23,6 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "hist", "pandas", "httpx", "pillow"]
+# Reading inputs from URLs: ssh:// and sftp:// (paramiko), http(s):// (aiohttp).
+# root:// additionally needs fsspec-xrootd and the XRootD Python bindings.
+remote = ["fsspec[http,ssh]", "requests"]
 
 [project.scripts]
 hep-pad = "heppad.cli:app"

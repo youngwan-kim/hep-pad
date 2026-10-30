@@ -60,3 +60,33 @@ def test_hidden_layer_still_computed(workdir):
 ])
 def test_lit(value, expected):
     assert lit(value) == expected
+
+
+def test_placed_axis_title_in_script(workdir, tmp_path):
+    spec = hw.load(workdir / "datamc.yaml")
+    spec.pad("ratio").xaxis.label_pos = (0.4, -0.3)
+    spec.pad("main").yaxis.label_pos = (-0.1, 0.6)
+    source = generate(spec, workdir, script_dir=tmp_path, output="script.png").source()
+    assert "ax_ratio.xaxis.set_label_coords(0.4, -0.3)" in source
+    editor_png = tmp_path / "editor.png"
+    hw.render(spec, workdir).save(editor_png)
+    script = tmp_path / "plot.py"
+    script.write_text(source)
+    run = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, text=True,
+                         env={"MPLBACKEND": "Agg", "PATH": ""})
+    assert run.returncode == 0, run.stderr
+    assert np.abs(imread(editor_png) - imread(tmp_path / "script.png")).max() == 0
+
+
+def test_moved_label_in_script(workdir, tmp_path):
+    spec = hw.load(workdir / "datamc.yaml")
+    spec.pad("main").label.offset = (0.05, -0.1)
+    spec.pad("main").label.lumi_offset = (-0.2, 0.0)
+    editor_png = tmp_path / "editor.png"
+    hw.render(spec, workdir).save(editor_png)
+    script = tmp_path / "plot.py"
+    script.write_text(generate(spec, workdir, script_dir=tmp_path, output="script.png").source())
+    run = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, text=True,
+                         env={"MPLBACKEND": "Agg", "PATH": ""})
+    assert run.returncode == 0, run.stderr
+    assert np.abs(imread(editor_png) - imread(tmp_path / "script.png")).max() == 0
